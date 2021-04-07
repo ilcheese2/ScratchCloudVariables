@@ -1,26 +1,30 @@
-'''Credit to https://scratch.mit.edu/users/Raihan142857/'''
-import requests
+mport requests
 import re
 import websocket
 import json
 import time
-import numpy # these last two lines speed up the websocket sending, they are optional, how they dont seem to be used in the code
+import numpy 
 import wsaccel
+import CloudVariables
+import threading
 
-class ScratchExceptions(Exception): #plural because I was going to add more
+class ScratchExceptions(Exception): 
     pass
 
-class InvalidCredentialsException(ScratchExceptions): #exception if wrong login information
+class InvalidCredentialsException(ScratchExceptions): 
     pass
 
+class ScratchSession(): 
 
-class ScratchSession(): #parantheses used for sub classes
-
-    def __init__(self, username, password, project_id): #parameters for the class, only can be used in init so we set to a self. variable
-        self.username = username #self shared across whole class like this
+    def __init__(self, username, password, project_id): 
+        self.username = username 
         self.password = password
         self.project_id  = project_id
         self.ws = websocket.WebSocket()
+        self.cloudvariables = []
+        self.timer = time.time()
+        self.login()
+        self.connect()
 
     def login(self):
         headers = {
@@ -41,36 +45,64 @@ class ScratchSession(): #parantheses used for sub classes
         except AttributeError:
             raise InvalidCredentialsException("Your password or username is incorrect")
 
-    def _sendPacket(self, packet): #_ = private function since python no have private function
+    def _sendPacket(self, packet): 
         self.ws.send(json.dumps(packet) + '\n') 
 
     def connect(self):
-        #global ws not needed
         self.ws.connect('wss://clouddata.scratch.mit.edu', cookie='scratchsessionsid='+self.sessionId+';', origin='https://scratch.mit.edu', enable_multithread=True) # connect the websocket
         self._sendPacket({
             'method': 'handshake',
             'user': self.username,
             'project_id': str(self.project_id)
-        }) # to set variables you need to handshake first
-        response = self.ws.recv()#work here(note for myself)
+        }) 
+        response = self.ws.recv().split("\n")
+        for variable in response:
+            try: 
+                variable = json.loads(str(variable))
+            except:
+                pass
+            else:
+                self.cloudvariables.append(CloudVariables.CloudVariable(variable["name"], variable["value"]))
 
-    def setCloudVar(self, variable, value):
-        try: 
-            self._sendPacket({
-                'method': 'set',
-                'name': '☁ ' + variable,
-                'value': str(value),
-                'user': self.username,
-                'project_id': str(self.project_id)
-            })
-        except (BrokenPipeError, websocket._exceptions.WebSocketConnectionClosedException):
-            # sometimes you get a BrokenPipeError randomly and this fixes it, caused by websocket closing
-            self.connect()
-            time.sleep(0.1) #Is this so scratch has time to read hand shake?
-            self.setCloudVar(variable, value)
+    def SetCloudVar(self, variable: str, value):
+        if time.time - self.timer > 0.1:
+            if not value.isdigit():
+                raise ValueError("Cloud variables can only be set to a combination of numbers")
+            try: 
+                self._sendPacket({
+                    'method': 'set',
+                    'name': ('☁ ' + variable if not variable.startswith('☁ ') else variable),
+                    'value': str(value),
+                    'user': self.username,
+                    'project_id': str(self.project_id)
+                })
+            except (BrokenPipeError, websocket._exceptions.WebSocketConnectionClosedException):
+                self.connect()
+                time.sleep(0.1) 
+                self.SetCloudVar(variable, value)
+                return
+            else:
+                self.timer = time.time()
+                for cloud in self.cloudvariables:
+                    if cloud.name == variable:
+                        cloud.value = value
+                        break
+        else:
+            time.sleep(time.time - self.timer)
+            self.SetCloudVar(variable, value)
     
-
-if __name__ == "__main__":
-    session = ScratchSession()
-    session.login()
-    session.setCloudVar()
+    def _GetCloudVariableLoop(self):
+        while True:
+            if self.ws.connected:
+                response = self.ws.recv()
+                response = json.loads(response)
+                for cloud in self.cloudvariables:
+                    if response["name"] == cloud.name:
+                        cloud.value = response["value"]
+            
+            else:
+                self.connect()
+    def GetCloudVariables(self):
+        """Will start a new thread that looks for the cloud variables and appends their results onto cloudvariables"""
+        thread = threading.Thread(target=self._GetCloudVariableLoop)
+        thread.start()
