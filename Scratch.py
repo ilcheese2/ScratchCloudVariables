@@ -6,9 +6,14 @@ import json
 import time
 import numpy 
 import wsaccel
-import CloudVariables
 import threading
 
+
+class CloudVariable():
+    def __init__(self, name: str, value: str):
+        self.name = name
+        self.value = value 
+        
 class ScratchExceptions(Exception): 
     pass
 
@@ -63,7 +68,7 @@ class ScratchSession():
             except:
                 pass
             else:
-                self.cloudvariables.append(CloudVariables.CloudVariable(variable["name"], variable["value"]))
+                self.cloudvariables.append(CloudVariable(variable["name"], variable["value"]))
 
     def SetCloudVar(self, variable: str, value):
         if time.time - self.timer > 0.1:
